@@ -11,6 +11,8 @@ use structopt::StructOpt;
 const BACKUP_TOOL_DIRECTORY: &str = ".local/share/backup-tool";
 const BACKUP_METADATA: &str = "backup.yaml";
 
+pub type BoxedErrorResult<T> = Result<T, Box<dyn std::error::Error>>;
+
 #[derive(Debug, StructOpt)]
 pub struct The {
     path: PathBuf,
@@ -97,7 +99,7 @@ fn ensure_dir_exists(dir_name: &PathBuf) -> std::io::Result<()> {
     create_dir_all(dir_name)
 }
 
-fn get_filetype(path: &PathBuf) -> Result<Filetype, Box<dyn std::error::Error>> {
+fn get_filetype(path: &PathBuf) -> BoxedErrorResult<Filetype> {
     let metadata = fs::metadata(path)?;
     if metadata.file_type().is_dir() {
         Ok(Filetype::Directory)
@@ -106,13 +108,19 @@ fn get_filetype(path: &PathBuf) -> Result<Filetype, Box<dyn std::error::Error>> 
     }
 }
 
-fn do_backup(backup_directory: &Path, from: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn read_metadata(backup_directory: &Path) -> BoxedErrorResult<Metadata> {
     let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
     ensure_file_exists(&backup_metadata_file)?;
 
-    let f = fs::File::open(backup_metadata_file.clone())?;
-    let mut backup_metadata: Metadata =
+    let f = fs::File::open(backup_metadata_file)?;
+    let backup_metadata: Metadata =
         serde_yaml::from_reader(f).expect("cannot read backup metadata");
+    Ok(backup_metadata)
+}
+
+fn do_backup(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {
+    let mut backup_metadata: Metadata = read_metadata(backup_directory)?;
+
     let from_filetype = get_filetype(from).expect("cannot check filetype for backuping file");
 
     if !backup_metadata.backups.contains_key(from) {
@@ -146,16 +154,15 @@ fn do_backup(backup_directory: &Path, from: &PathBuf) -> Result<(), Box<dyn std:
     match from_filetype {
         Filetype::Directory => {
             copy_dir::copy_dir(from, new_version_path).expect("failed to backup directory");
-            ()
         }
         Filetype::File => {
             fs::copy(from, new_version_path).expect("failed to backup file");
-            ()
         }
     }
 
     this_backup_metadata.versions.push(new_version);
 
+    let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
     let f =
         fs::File::create(backup_metadata_file).expect("cannot open file to save updated metadata");
     serde_yaml::to_writer(f, &backup_metadata).expect("failed to write updated metadata");
@@ -163,26 +170,33 @@ fn do_backup(backup_directory: &Path, from: &PathBuf) -> Result<(), Box<dyn std:
     Ok(())
 }
 
-fn list(backup_directory: PathBuf) {}
-fn versions(backup_directory: PathBuf, from: PathBuf) {}
+fn list(backup_directory: &Path) -> BoxedErrorResult<()> {
+    let backup_metadata = read_metadata(backup_directory)?;
+    backup_metadata
+        .backups
+        .iter()
+        .for_each(|backup| println!("{}", backup.0.to_str().unwrap()));
+    Ok(())
+}
+
+fn list_versions(backup_directory: PathBuf, from: PathBuf) {}
 fn restore(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
 fn clean(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> BoxedErrorResult<()> {
     let default_path = dirs::home_dir()
         .unwrap()
         .join(Path::new(BACKUP_TOOL_DIRECTORY));
-    let backup_directory =
-        env::var("BACKUP_TOOL_DIRECTORY").map_or(default_path, PathBuf::from);
+    let backup_directory = env::var("BACKUP_TOOL_DIRECTORY").map_or(default_path, PathBuf::from);
     ensure_dir_exists(&backup_directory)?;
 
     let opt = Opt::from_args();
     match opt {
         Opt::The(the) => do_backup(&backup_directory, &the.path)?,
-        Opt::List(_) => println!("list"),
-        Opt::Versions(versions) => println!("versions"),
-        Opt::Restore(restore) => println!("restore"),
-        Opt::Clean(clean) => println!("clean"),
+        Opt::List(_) => list(&backup_directory)?,
+        Opt::Versions(versions) => list_versions(backup_directory, versions.path),
+        Opt::Restore(r) => restore(backup_directory, r.path, r.version),
+        Opt::Clean(c) => clean(backup_directory, c.path, c.version),
     }
 
     Ok(())

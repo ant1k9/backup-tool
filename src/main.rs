@@ -179,7 +179,23 @@ fn list(backup_directory: &Path) -> BoxedErrorResult<()> {
     Ok(())
 }
 
-fn list_versions(backup_directory: PathBuf, from: PathBuf) {}
+fn list_versions(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {
+    let backup_metadata = read_metadata(backup_directory)?;
+    if !backup_metadata.backups.contains_key(from) {
+        println!("no backups for {}", from.to_str().unwrap());
+        return Ok(());
+    }
+
+    backup_metadata
+        .backups
+        .get(from)
+        .unwrap()
+        .versions
+        .iter()
+        .for_each(|version| println!("v{:?} {}", version.version, version.timestamp));
+    Ok(())
+}
+
 fn restore(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
 fn clean(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
 
@@ -194,7 +210,7 @@ fn main() -> BoxedErrorResult<()> {
     match opt {
         Opt::The(the) => do_backup(&backup_directory, &the.path)?,
         Opt::List(_) => list(&backup_directory)?,
-        Opt::Versions(versions) => list_versions(backup_directory, versions.path),
+        Opt::Versions(versions) => list_versions(&backup_directory, &versions.path)?,
         Opt::Restore(r) => restore(backup_directory, r.path, r.version),
         Opt::Clean(c) => clean(backup_directory, c.path, c.version),
     }

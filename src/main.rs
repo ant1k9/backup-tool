@@ -2,7 +2,7 @@ use rand::distributions::Alphanumeric;
 use rand::{thread_rng, Rng};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fs::create_dir_all;
+use std::fs::{create_dir_all, remove_dir_all};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::{env, fs};
@@ -61,7 +61,7 @@ pub enum Filetype {
     Directory,
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BackupVersionMetadata {
     version: u32,
     timestamp: String,
@@ -118,6 +118,14 @@ fn read_metadata(backup_directory: &Path) -> BoxedErrorResult<Metadata> {
     Ok(backup_metadata)
 }
 
+fn save_metadata(backup_directory: &Path, backup_metadata: &Metadata) -> BoxedErrorResult<()> {
+    let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
+    let f =
+        fs::File::create(backup_metadata_file).expect("cannot open file to save updated metadata");
+    serde_yaml::to_writer(f, backup_metadata).expect("failed to write updated metadata");
+    Ok(())
+}
+
 fn do_backup(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {
     let mut backup_metadata: Metadata = read_metadata(backup_directory)?;
 
@@ -161,13 +169,7 @@ fn do_backup(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {
     }
 
     this_backup_metadata.versions.push(new_version);
-
-    let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
-    let f =
-        fs::File::create(backup_metadata_file).expect("cannot open file to save updated metadata");
-    serde_yaml::to_writer(f, &backup_metadata).expect("failed to write updated metadata");
-
-    Ok(())
+    save_metadata(backup_directory, &backup_metadata)
 }
 
 fn list(backup_directory: &Path) -> BoxedErrorResult<()> {
@@ -197,7 +199,63 @@ fn list_versions(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()
 }
 
 fn restore(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
-fn clean(backup_directory: PathBuf, to: PathBuf, version: Option<String>) {}
+
+fn clean(backup_directory: &Path, to: &PathBuf, version: Option<String>) -> BoxedErrorResult<()> {
+    let mut backup_metadata = read_metadata(backup_directory)?;
+    if !backup_metadata.backups.contains_key(to) {
+        println!("no backups for {}", to.to_str().unwrap());
+        return Ok(());
+    }
+
+    let this_backup_metadata = backup_metadata.backups.get_mut(to).unwrap();
+    if let Some(v) = version {
+        if v.is_empty() || !v.starts_with('v') {
+            return Err(
+                String::from("invalid format for version, should be in form v1, v2...").into(),
+            );
+        }
+        let version = v[1..].parse::<u32>().expect("cannot parse version number");
+        match this_backup_metadata
+            .versions
+            .iter()
+            .find(|item| item.version == version)
+        {
+            Some(_) => {
+                let remove_version_path = this_backup_metadata.path.join(&v);
+                match this_backup_metadata.filetype {
+                    Filetype::File => fs::remove_file(remove_version_path).unwrap_or_else(|_| {
+                        panic!("cannot remove {v} for file {}", to.to_str().unwrap())
+                    }),
+                    Filetype::Directory => {
+                        fs::remove_file(remove_version_path).unwrap_or_else(|_| {
+                            panic!("cannot remove {v} for directory {}", to.to_str().unwrap())
+                        })
+                    }
+                }
+
+                this_backup_metadata
+                    .versions
+                    .retain(|item| item.version != version);
+                save_metadata(backup_directory, &backup_metadata)?;
+                println!(
+                    "successufully remove version {v} for {}",
+                    to.to_str().unwrap()
+                );
+            }
+            None => println!("no version {} found", v),
+        }
+        return Ok(());
+    }
+
+    fs::remove_dir_all(&this_backup_metadata.path)
+        .unwrap_or_else(|_| panic!("cannot clean backups for {}", to.to_str().unwrap()));
+
+    backup_metadata.backups.remove(to);
+    save_metadata(backup_directory, &backup_metadata)?;
+
+    println!("successufully remove backups for {}", to.to_str().unwrap());
+    Ok(())
+}
 
 fn main() -> BoxedErrorResult<()> {
     let default_path = dirs::home_dir()
@@ -212,7 +270,7 @@ fn main() -> BoxedErrorResult<()> {
         Opt::List(_) => list(&backup_directory)?,
         Opt::Versions(versions) => list_versions(&backup_directory, &versions.path)?,
         Opt::Restore(r) => restore(backup_directory, r.path, r.version),
-        Opt::Clean(c) => clean(backup_directory, c.path, c.version),
+        Opt::Clean(c) => clean(&backup_directory, &c.path, c.version)?,
     }
 
     Ok(())

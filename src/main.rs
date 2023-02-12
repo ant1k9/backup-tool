@@ -1,16 +1,14 @@
-use rand::distributions::Alphanumeric;
-use rand::{thread_rng, Rng};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::io::Write;
+use backup_tool::errors::BoxedErrorResult;
+use backup_tool::file_ops::*;
+use backup_tool::filetype::*;
+use backup_tool::metadata::*;
+use backup_tool::rand::*;
+
 use std::path::{Path, PathBuf};
 use std::{env, fs};
 use structopt::StructOpt;
 
 const BACKUP_TOOL_DIRECTORY: &str = ".local/share/backup-tool";
-const BACKUP_METADATA: &str = "backup.yaml";
-
-pub type BoxedErrorResult<T> = Result<T, Box<dyn std::error::Error>>;
 
 #[derive(Debug, StructOpt)]
 pub struct The {
@@ -52,77 +50,6 @@ enum Opt {
     Restore(Restore),
     #[structopt(name = "clean")]
     Clean(Clean),
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone, Copy)]
-pub enum Filetype {
-    File,
-    Directory,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BackupVersionMetadata {
-    version: u32,
-    timestamp: String,
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct BackupMetadata {
-    path: PathBuf,
-    filetype: Filetype,
-    versions: Vec<BackupVersionMetadata>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct Metadata {
-    backups: HashMap<PathBuf, BackupMetadata>,
-}
-
-fn rand_string() -> String {
-    thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(16)
-        .map(char::from)
-        .collect()
-}
-
-fn ensure_file_exists(filename: &PathBuf) -> std::io::Result<()> {
-    if !Path::new(filename).exists() {
-        let mut f = fs::File::create(filename)?;
-        f.write_all(b"---\nbackups:")?;
-    }
-    Ok(())
-}
-
-fn ensure_dir_exists(dir_name: &PathBuf) -> std::io::Result<()> {
-    fs::create_dir_all(dir_name)
-}
-
-fn get_filetype(path: &PathBuf) -> BoxedErrorResult<Filetype> {
-    let metadata = fs::metadata(path)?;
-    if metadata.file_type().is_dir() {
-        Ok(Filetype::Directory)
-    } else {
-        Ok(Filetype::File)
-    }
-}
-
-fn read_metadata(backup_directory: &Path) -> BoxedErrorResult<Metadata> {
-    let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
-    ensure_file_exists(&backup_metadata_file)?;
-
-    let f = fs::File::open(backup_metadata_file)?;
-    let backup_metadata: Metadata =
-        serde_yaml::from_reader(f).expect("cannot read backup metadata");
-    Ok(backup_metadata)
-}
-
-fn save_metadata(backup_directory: &Path, backup_metadata: &Metadata) -> BoxedErrorResult<()> {
-    let backup_metadata_file = backup_directory.join(BACKUP_METADATA);
-    let f =
-        fs::File::create(backup_metadata_file).expect("cannot open file to save updated metadata");
-    serde_yaml::to_writer(f, backup_metadata).expect("failed to write updated metadata");
-    Ok(())
 }
 
 fn do_backup(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {

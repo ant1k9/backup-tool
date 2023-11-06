@@ -1,3 +1,5 @@
+#![feature(absolute_path)]
+
 use backup_tool::errors::BoxedErrorResult;
 use backup_tool::file_ops::*;
 use backup_tool::filetype::*;
@@ -54,7 +56,7 @@ enum Opt {
 
 fn do_backup(backup_directory: &Path, from: &PathBuf) -> BoxedErrorResult<()> {
     let mut backup_metadata: Metadata = read_metadata(backup_directory)?;
-    let canonical = fs::canonicalize(from).expect("cannot canonicalize path to file");
+    let canonical = absolute(from)?;
     let from = &canonical;
 
     let from_filetype = get_filetype(from).expect("cannot check filetype for backuping file");
@@ -154,7 +156,7 @@ fn restore_version(
 
 fn restore(backup_directory: &Path, to: &PathBuf, version: Option<String>) -> BoxedErrorResult<()> {
     let backup_metadata = read_metadata(backup_directory)?;
-    let canonical = fs::canonicalize(to).expect("cannot canonicalize path to file");
+    let canonical = absolute(to)?;
     let to = &canonical;
     if !backup_metadata.backups.contains_key(to) {
         println!("no backups for {}", to.to_str().unwrap());
@@ -194,7 +196,7 @@ fn restore(backup_directory: &Path, to: &PathBuf, version: Option<String>) -> Bo
 
 fn clean(backup_directory: &Path, to: &PathBuf, version: Option<String>) -> BoxedErrorResult<()> {
     let mut backup_metadata = read_metadata(backup_directory)?;
-    let canonical = fs::canonicalize(to).expect("cannot canonicalize path to file");
+    let canonical = absolute(to)?;
     let to = &canonical;
 
     if !backup_metadata.backups.contains_key(to) {
@@ -250,6 +252,11 @@ fn clean(backup_directory: &Path, to: &PathBuf, version: Option<String>) -> Boxe
 
     println!("successfully remove backups for {}", to.to_str().unwrap());
     Ok(())
+}
+
+fn absolute(path: &PathBuf) -> BoxedErrorResult<PathBuf> {
+    let absolute_path = std::path::absolute(path).expect("cannot prepare absolute path");
+    Ok(absolute_path)
 }
 
 fn main() -> BoxedErrorResult<()> {
